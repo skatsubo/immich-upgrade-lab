@@ -69,7 +69,7 @@ setup_baseline_initial () {
     log "Create backup"
     docker compose stop
     mkdir -p "$ver"
-    cp -r ./library ./postgres "$ver"
+    cp -r ./library ./postgres .env docker-compose.yml "$ver"
 
     teardown
 }
