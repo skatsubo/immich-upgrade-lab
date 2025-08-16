@@ -116,7 +116,7 @@ provision_from_backup() {
 wait_for_immich_running() {
     log "Wait for Immich to become ready"
     container="immich_server"
-    for i in $(seq 1 $((timeout/2))); do
+    for i in $(seq 1 $((timeout_startup/2))); do
         status=$(docker inspect --format='{{.State.Health.Status}}' "$container")
         if [[ $status == "healthy" ]]; then
             echo "Container is healthy."
