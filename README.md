@@ -14,7 +14,7 @@ Step by step execution of the script:
 
 1. Initial version.
 The sandbox can be created from scratch (empty), from an existing snapshot, from data of an existing Immich instance (library, postgres).
-The sandbox can be reviewed and configured or populated with assets before performing an upgrade.
+It's possible to interact with the sandbox (open Immich UI, change settings, populate with assets) before performing an upgrade.
 
 - It deploys the initial version.
 - You do initial setup and add some files to the sandbox.
@@ -34,7 +34,7 @@ Before each upgrade test a fresh sandbox instance is created/restored from a sna
 
 ## How to use
 
-Quick start:
+### Quick start
 
 1. Download [test-upgrade.sh](https://raw.githubusercontent.com/skatsubo/immich-upgrade-lab/refs/heads/main/test-upgrade.sh) from Github and make the script executable: `chmod +x path/to/test-upgrade.sh`
 2. Go to an empty directory.
@@ -45,6 +45,52 @@ Example:
 ```sh
 # upgrade from v1.123.0 to v1.132.3
 ./test-upgrade.sh v1.123.0 v1.132.3
+```
+
+### Sandbox for an existing Immich instance
+
+Run sandbox and try upgrades using data from the existing Immich.
+
+Assume the layout with two separate directories - `/app/immich` for compose and `/data/immich` for persistent data.
+
+<details>
+<summary>Directory trees for (1) compose, (2) persistent data</summary>
+
+```
+tree -a -L 1/app/immich
+
+/app/immich
+├── compose.override.yaml
+├── compose.yaml
+├── conf
+└── .env
+```
+
+```
+tree -L 2 /data/immich
+
+/data/immich
+├── library
+│   ├── backups
+│   ├── encoded-video
+│   ├── library
+│   ├── profile
+│   ├── thumbs
+│   └── upload
+└── postgres
+    ├── base
+    ...
+    └── postmaster.pid
+```
+</details>
+
+This will copy all your Immich data into a sandbox/snapshot before performing an upgrade.
+
+```sh
+./test-upgrade.sh v1.125.7 v1.132.3 \
+  --from-compose /app/immich \
+  --from-data /data/immich/library \
+  --from-postgres /data/immich/postgres
 ```
 
 ## Getting help
