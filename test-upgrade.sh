@@ -1,23 +1,5 @@
 #!/usr/bin/env bash
 
-
-
-# --from-dir for using existing backup/origin
-#     Path to a current backup
-
-#     > Copy your/the current/existing backup to the local sandbox
-#     > Creating the "real" starting point without needing to manually load/configure anything
-
-#     origin/baseline type = { internal/managed/fresh, external }
-
-#     layout/tree of baseline source directory
-#         allow providing separately paths to
-#             library
-#             postgres
-#             compose
-
-
-
 #
 # shell
 #
@@ -30,8 +12,11 @@ timeout_startup=120
 
 # dir for running sandbox (ephemeral/test instance undergoing upgrade from baseline to target)
 sandbox_dir='.'
-# dir for everything else: managed baselines/snapshots/origins and compose release files 
+# dir for everything else: managed baselines/snapshots/origins and compose release files. They are placed in corresponding subdirectories
 cache_dir='.'
+# use rsync instead of cp
+use_rsync=true
+
 
 #
 # aux functions
@@ -47,6 +32,23 @@ err() {
 debug() {
     if [[ -n "$DEBUG" ]] ; then
         echo "debug:" "${FUNCNAME[1]}:" "$@"
+    fi
+}
+
+# copy from source to destination dir
+# a wrapper for cp / rsync
+copy() {
+    local src="$1"
+    local dest="$2"
+    shift 2
+    local opts="$*"
+    log "Copy from: $src to: $dest"
+
+    if [[ -n "$use_rsync" ]] ; then
+        rsync -a $opts "$src"/ "$dest"
+    else
+        mkdir -p "$dest"
+        cp -r "$src"/. "$dest"
     fi
 }
 
@@ -83,6 +85,8 @@ ensure_paths() {
     # script_dir=$(dirname $(realpath -f "$0"))
 
     snapshot_dir="$cache_dir_abs/snapshot/$from"
+    snapshot_data_dir="$snapshot_dir/library"
+    snapshot_postgres_dir="$snapshot_dir/postgres"
 
     release_dir="$cache_dir_abs/release/$from"
 
@@ -109,11 +113,11 @@ download_release_compose_files() {
     done
 }
 
-detemine_sandbox_sources() {
+determine_sandbox_sources() {
     # if
     #   no custom "from" source compose/data/postgres paths specified 
     # and 
-    #   snapshot already exists at the default "snapshot/$version" path
+    #   snapshot already exists at the default "./snapshot/$version" path
     # then use snapshot's content (copy its data/config when provisioning new sandbox)
     if [[ -z ${from_compose}${from_data}${from_postgres} ]] && check_snapshot_exists ; then
         source_type='snapshot'
@@ -122,7 +126,7 @@ detemine_sandbox_sources() {
         source_data_dir="$snapshot_dir/library"
         source_postgres_dir="$snapshot_dir/postgres"
 
-        log "Snapshot exists in '$snapshot_dir', use it as source when creating sandbox. (Remove the snapshot directory if you would like to start from scratch, then re-run this script)"
+        log "Snapshot exists in '$snapshot_dir', use it as a source when creating sandbox. (Remove the snapshot directory if you would like to start from scratch, then re-run this script)"
     else
         # when a directory is specified, use it
         # otherwise for compose use the release version, for data/postgres assume they need to be created from scratch
@@ -154,10 +158,7 @@ provision_sandbox_compose() {
 
     log "Provision compose and env files from: $source_dir"
 
-    cp "$source_dir"/*compose*.y*ml "$dest_dir"
-    cp "$source_dir"/.env           "$dest_dir"
-    # TODO: *.env, if exists, to avoid "No such file or directory". Or rsync.
-    # cp "$source_dir"/*.env "$dest_dir"
+    copy "$source_dir" "$dest_dir" --include='*compose*.y*ml' --include='*.env' --exclude='*'
 
     echo "IMMICH_VERSION=$ver" >> "$dest_dir"/.env
 }
@@ -169,15 +170,14 @@ provision_sandbox_content() {
     local dest_dir="$3"
     log "Provision $content from: $source_dir"
 
-    mkdir -p "$dest_dir"
-    cp -r "$source_dir"/. "$dest_dir"
+    copy "$source_dir" "$dest_dir"
 }
 
 # provision sandbox from sources (if any) or use empty/default
 provision_sandbox() {
     log "Provision sandbox from: $source_type"
 
-    # clean up first
+    # clean up first, destructive operation
     provision_sandbox_cleanup
 
     # compose
@@ -212,7 +212,7 @@ provision_sandbox_from_snapshot() {
 }
 
 deploy_stack() {
-    log "These images will be used:"
+    log "These docker images will be used:"
     docker compose config | grep "image:"
         # Expected output includes current version to be upgraded from
         # image: docker.io/tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0
@@ -263,14 +263,10 @@ make_snapshot() {
 
     mkdir -p "$snapshot_dir"
 
-    # TODO: proper vars snapshot_dir vs snapshot_data_dir / snapshot_postgres_dir, etc
-    # TODO: cleanup before copying
-    # TODO: use function instead of cp
-    cp -r "$sandbox_data_dir" "$sandbox_postgres_dir" "$snapshot_dir"
-    cp "$sandbox_dir"/*compose*.y*ml "$snapshot_dir"
-    cp "$sandbox_dir"/.env           "$snapshot_dir"
-    # TODO: *.env, if exists, to avoid "No such file or directory". Or rsync.
-    # cp "$sandbox_dir"/*.env          "$snapshot_dir"
+    # TODO: cleanup before copying ?
+    copy "$sandbox_data_dir" "$snapshot_data_dir"
+    copy "$sandbox_postgres_dir" "$snapshot_postgres_dir"
+    copy "$sandbox_dir" "$snapshot_dir" --include='*compose*.y*ml' --include='*.env' --exclude='*'
 
     touch "$snapshot_dir/state.ok"
 }
@@ -327,9 +323,9 @@ cli_print_help() {
     echo "  --from-compose <dir>    Use compose files from specified location when creating sandbox."
     echo "  --from-data <dir>       Use (copy) Immich data (library) from specified location when creating sandbox."
     echo "  --from-postgres <dir>   Use (copy) Postgres data from specified location when creating sandbox."
-    # echo "  --from-compose-release  [WIP] Force using release compose files for sandbox even if compose files are present in the baseline."
+    # echo "  --from-compose-release  [WIP] Force using release compose files for sandbox even if compose files are present in the snapshot."
     # echo "                          By default release files are used only when creating a fresh sandbox from scratch or when missing in source."
-    # echo "  --from-dir <...>        [WIP] Create sandbox using a copy of existing data (library, postgres) in <dir>."
+    # echo "  --from-dir <...>        [WIP] Create sandbox by copying existing data (library, postgres) from <dir>."
     echo
     echo "Examples:"
     echo "  $0 v1.123.0 v1.132.3"
@@ -386,7 +382,7 @@ ver="$from"
 ensure_paths
 
 # use sandbox dir as the current/work dir for all following tasks/functions
-# for now assume cwd is the sandbox dir
+# for now assume current working dir is the sandbox dir
 # TODO: support "cd anywhere"
 # cd "$sandbox_dir"
 
@@ -396,7 +392,7 @@ download_release_compose_files "$from" "$to"
 
 # prepare sandbox
 ver="$from"
-detemine_sandbox_sources
+determine_sandbox_sources
 log "Setting up a sandbox $ver to be tested for upgrades. Sandbox data will be populated from: $source_type."
 if docker compose config 2>&1 >/dev/null ; then
   teardown
