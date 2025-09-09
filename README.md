@@ -10,6 +10,10 @@ A tool/sandbox for testing Immich version upgrades.
 
 This tool automates validation of upgrade paths: it deploys the initial version in a sandbox and performs an upgrade to the target version. (Post-upgrade e2e tests to be implemented in the future).
 
+It tests two upgrade scenarios:
+- from old version to new version + old compose
+- from old version to new version + new compose
+
 Step by step execution of the script:
 
 1. Initial version.
@@ -91,6 +95,17 @@ This will copy all your Immich data into a sandbox/snapshot before performing an
   --from-compose /app/immich \
   --from-data /data/immich/library \
   --from-postgres /data/immich/postgres
+```
+
+### Sandbox for an existing remote Immich instance (with rsync)
+
+Copy thumbnails and copy Postgres from the existing instance. Use the release compose instead of the existing one (omiting `--from-compose`).
+
+```sh
+./test-upgrade.sh v1.140.1 v1.140.1 \
+  --from-data immich.internal:/dc/data/immich/library \
+  --from-data-opts "-v --include=.immich --include=thumbs/** --include=*/ --exclude=* --prune-empty-dirs" \
+  --from-postgres immich.internal:/dc/data/immich/postgres
 ```
 
 ## Getting help

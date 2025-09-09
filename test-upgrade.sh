@@ -42,7 +42,7 @@ copy() {
     local dest="$2"
     shift 2
     local opts="$*"
-    log "Copy from: $src to: $dest"
+    log "Copy from: $src to: $dest opts: ${opts:-none}"
 
     if [[ -n "$use_rsync" ]] ; then
         rsync -a $opts "$src"/ "$dest"
@@ -122,7 +122,11 @@ determine_sandbox_sources() {
     if [[ -z ${from_compose}${from_data}${from_postgres} ]] && check_snapshot_exists ; then
         source_type='snapshot'
 
-        source_compose_dir="$snapshot_dir"
+        if [[ -z $from_compose_release ]]; then
+            source_compose_dir="$snapshot_dir"
+        else
+            source_compose_dir="$release_dir"
+        fi
         source_data_dir="$snapshot_dir/library"
         source_postgres_dir="$snapshot_dir/postgres"
 
@@ -142,13 +146,20 @@ determine_sandbox_sources() {
     log "Snapshot source type: $source_type"
 }
 
-provision_sandbox_cleanup() {
-    rm -rf "$sandbox_dir"/*compose*.y*ml
-    rm -rf "$sandbox_dir"/.env
-    # TODO: *.env, if exists, to avoid "No such file or directory"
-    # rm -rf "$sandbox_dir"/*.env
+provision_sandbox_cleanup_compose() {
+    # remove compose files
+    find "$sandbox_dir" -type f -maxdepth 1 \( -name '*compose*.y*ml' -o -name '*.env' \) -delete
+}
+
+provision_sandbox_cleanup_data_postgres() {
+    # remove data (library) and postgres
     rm -rf "$sandbox_data_dir"
     rm -rf "$sandbox_postgres_dir"
+}
+
+provision_sandbox_cleanup() {
+    provision_sandbox_cleanup_compose
+    provision_sandbox_cleanup_data_postgres
 }
 
 provision_sandbox_compose() {
@@ -168,24 +179,32 @@ provision_sandbox_content() {
     local content="$1"
     local source_dir="$2"
     local dest_dir="$3"
+    shift 3
+    local opts="$*"
     log "Provision $content from: $source_dir"
 
-    copy "$source_dir" "$dest_dir"
+    copy "$source_dir" "$dest_dir" $opts
 }
 
 # provision sandbox from sources (if any) or use empty/default
 provision_sandbox() {
     log "Provision sandbox from: $source_type"
 
-    # clean up first, destructive operation
-    provision_sandbox_cleanup
+    # clean up when from "scratch", destructive operation
+    # exclude "custom" and "snapshot" from cleanup as a perf optimization:
+    # in case there is large volume of data to be copied, especially over network
+    # TODO: handle "custom" and "snapshot" to avoid accumulating garbage, e.g. rsync --delete
+    provision_sandbox_cleanup_compose
+    if [[ $source_type == "scratch" ]]; then
+        provision_sandbox_cleanup_data_postgres
+    fi
 
     # compose
     provision_sandbox_compose "$from" "$source_compose_dir" "$sandbox_dir"
 
     # data
     if [[ -n $source_data_dir ]]; then
-        provision_sandbox_content data "$source_data_dir" "$sandbox_data_dir"
+        provision_sandbox_content data "$source_data_dir" "$sandbox_data_dir" "$from_data_opts"
     else
         log "Provision empty data dir"
     fi
@@ -201,10 +220,15 @@ provision_sandbox() {
 }
 
 # TODO: handling of $source_type to make code DRY
+# TODO: use determine_sandbox_sources()
 provision_sandbox_from_snapshot() {
     source_type="snapshot"
 
-    source_compose_dir="$snapshot_dir"
+    if [[ -z $from_compose_release ]]; then
+        source_compose_dir="$snapshot_dir"
+    else
+        source_compose_dir="$release_dir"
+    fi
     source_data_dir="$snapshot_dir/library"
     source_postgres_dir="$snapshot_dir/postgres"
 
@@ -228,8 +252,10 @@ deploy_stack() {
 teardown() {
     log "Teardown: remove stack, configs, data (if present)"
     # "down" without "-v" to keep the named volume of ML model cache - to avod re-downloading model files and make testing faster
-    [ -f docker-compose.yml ] && docker compose down
-    rm -rf ./library ./postgres .env docker-compose.yml docker-compose.override.yml
+    if [[ -f docker-compose.yml ]] || [[ -f compose.yaml ]]; then
+        docker compose down
+    fi
+    provision_sandbox_cleanup
 }
 
 setup_sandbox_initial () {
@@ -322,8 +348,9 @@ cli_print_help() {
     echo "Optional arguments:"
     echo "  --from-compose <dir>    Use compose files from specified location when creating sandbox."
     echo "  --from-data <dir>       Use (copy) Immich data (library) from specified location when creating sandbox."
+    echo "  --from-data-opts <opts> Filter applied when copying existing Immich data (library). Passed verbatim to rsync."
     echo "  --from-postgres <dir>   Use (copy) Postgres data from specified location when creating sandbox."
-    # echo "  --from-compose-release  [WIP] Force using release compose files for sandbox even if compose files are present in the snapshot."
+    # echo "  --from-compose-release  [WIP] Force using release compose files for sandbox even if compose files are present in the source (snapshot or custom)."
     # echo "                          By default release files are used only when creating a fresh sandbox from scratch or when missing in source."
     # echo "  --from-dir <...>        [WIP] Create sandbox by copying existing data (library, postgres) from <dir>."
     echo
@@ -338,15 +365,15 @@ parse_args() {
 
     while [[ "$#" -gt 0 ]]; do
         case "$1" in
-            --from)          from="$2"; from_version="$2"; shift 2 ;;
-            --from-compose)  from_compose="$2"; shift 2 ;;
+            --from)            from="$2"; from_version="$2"; shift 2 ;;
+            --from-compose)    from_compose="$2"; shift 2 ;;
             --from-compose-release) from_compose_release=1; shift ;;
-            --from-data)     from_data="$2" ; shift 2 ;;
-            --from-postgres) from_postgres="$2" ; shift 2 ;;
-            --to)            to="$2"; to_version="$2" ; shift 2 ;;
-            --help|-h)       cli_print_help; exit 0 ;;
-            # *)               from="$1"; to="$2"; break ;;
-            *)               from="$1"; to="$2" ; shift 2 ;;
+            --from-data)       from_data="$2" ; shift 2 ;;
+            --from-data-opts)  from_data_opts="$2" ; shift 2 ;;
+            --from-postgres)   from_postgres="$2" ; shift 2 ;;
+            --to)              to="$2"; to_version="$2" ; shift 2 ;;
+            --help|-h)         cli_print_help; exit 0 ;;
+            *)                 from="$1"; to="$2" ; shift 2 ;;
         esac
     done
 
@@ -394,7 +421,7 @@ download_release_compose_files "$from" "$to"
 ver="$from"
 determine_sandbox_sources
 log "Setting up a sandbox $ver to be tested for upgrades. Sandbox data will be populated from: $source_type."
-if docker compose config 2>&1 >/dev/null ; then
+if docker compose config >/dev/null 2>&1 ; then
   teardown
 fi
 provision_sandbox
